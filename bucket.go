@@ -1,9 +1,7 @@
 package leaky
 
 import (
-	"bytes"
 	"encoding/binary"
-	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
@@ -12,10 +10,6 @@ import (
 )
 
 var ErrBucketFull = errors.New("leaky: bucket full or would overflow")
-
-func init() {
-	gob.Register(&Bucket{})
-}
 
 type Bucket struct {
 	DrainBy       int64
@@ -53,7 +47,7 @@ func DecodeBucket(r io.Reader) (*Bucket, error) {
 	// Check format version
 	format := int32(0)
 	if err := binary.Read(r, binary.BigEndian, &format); err != nil {
-		return nil, err
+		return nil, errors.Join(errors.New("leaky: unable to read format version"), err)
 	}
 	if format != 1 {
 		return nil, fmt.Errorf("leaky: unsupported format version %d", format)
@@ -61,57 +55,68 @@ func DecodeBucket(r io.Reader) (*Bucket, error) {
 
 	// Read fields in write order
 	if err := binary.Read(r, binary.BigEndian, &bucket.DrainBy); err != nil {
-		return nil, err
+		return nil, errors.Join(errors.New("leaky: unable to read `DrainBy`"), err)
 	}
 	if err := binary.Read(r, binary.BigEndian, &bucket.DrainInterval); err != nil {
-		return nil, err
+		return nil, errors.Join(errors.New("leaky: unable to read `DrainInterval`"), err)
 	}
 	if err := binary.Read(r, binary.BigEndian, &bucket.Capacity); err != nil {
-		return nil, err
+		return nil, errors.Join(errors.New("leaky: unable to read `Capacity`"), err)
 	}
 	if err := binary.Read(r, binary.BigEndian, &bucket.value); err != nil {
-		return nil, err
+		return nil, errors.Join(errors.New("leaky: unable to read `value`"), err)
 	}
-	lastDrainMs := int64(0)
-	if err := binary.Read(r, binary.BigEndian, &lastDrainMs); err != nil {
-		return nil, err
+	timestampSize := int32(0)
+	if err := binary.Read(r, binary.BigEndian, &timestampSize); err != nil {
+		return nil, errors.Join(errors.New("leaky: unable to read size of `lastDrain`"), err)
 	}
-	bucket.lastDrain = time.UnixMilli(lastDrainMs)
+	timestampBytes := make([]byte, timestampSize)
+	if c, err := r.Read(timestampBytes); err != nil {
+		return nil, errors.Join(errors.New("leaky: unable to read `lastDrain`"), err)
+	} else if int32(c) != timestampSize {
+		return nil, errors.New("leaky: did not read entire timestamp")
+	}
+	if err := bucket.lastDrain.UnmarshalBinary(timestampBytes); err != nil {
+		return nil, errors.Join(errors.New("leaky: unable to unmarshal `lastDrain`"), err)
+	}
 
 	return bucket, nil
 }
 
 func (b *Bucket) Encode(w io.Writer) error {
-	buf := &bytes.Buffer{}
-
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 	// Format version
-	if err := binary.Write(buf, binary.BigEndian, int32(1)); err != nil {
+	if err := binary.Write(w, binary.BigEndian, int32(1)); err != nil {
 		return errors.Join(errors.New("leaky: unable to write format version"), err)
 	}
 
 	// Fields, ordered
-	if err := binary.Write(buf, binary.BigEndian, b.DrainBy); err != nil {
+	if err := binary.Write(w, binary.BigEndian, b.DrainBy); err != nil {
 		return errors.Join(errors.New("leaky: unable to write `DrainBy`"), err)
 	}
-	if err := binary.Write(buf, binary.BigEndian, b.DrainInterval); err != nil {
+	if err := binary.Write(w, binary.BigEndian, b.DrainInterval); err != nil {
 		return errors.Join(errors.New("leaky: unable to write `DrainInterval`"), err)
 	}
-	if err := binary.Write(buf, binary.BigEndian, b.Capacity); err != nil {
+	if err := binary.Write(w, binary.BigEndian, b.Capacity); err != nil {
 		return errors.Join(errors.New("leaky: unable to write `Capacity`"), err)
 	}
-	if err := binary.Write(buf, binary.BigEndian, b.value); err != nil {
+	if err := binary.Write(w, binary.BigEndian, b.value); err != nil {
 		return errors.Join(errors.New("leaky: unable to write `value`"), err)
 	}
-	if err := binary.Write(buf, binary.BigEndian, b.lastDrain.UnixMilli()); err != nil {
-		return errors.Join(errors.New("leaky: unable to write `lastDrain`"), err)
+	if timestampBytes, err := b.lastDrain.MarshalBinary(); err != nil {
+		return errors.Join(errors.New("leaky: unable to marshal `lastDrain`"), err)
+	} else {
+		if err := binary.Write(w, binary.BigEndian, int32(len(timestampBytes))); err != nil {
+			return errors.Join(errors.New("leaky: unable to write length of `lastDrain`"), err)
+		}
+		if _, err := w.Write(timestampBytes); err != nil {
+			return errors.Join(errors.New("leaky: unable to write `lastDrain`"), err)
+		}
 	}
 
-	// Write and return
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
 func (b *Bucket) drain() {

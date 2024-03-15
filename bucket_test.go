@@ -1,12 +1,52 @@
 package leaky
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
+
+type faultyReaderWriter struct {
+	io.Reader
+	io.Writer
+
+	FailOnReadOp  int // 1 indexed
+	FailOnWriteOp int // 1 indexed
+	Buffer        *bytes.Buffer
+
+	readOp  int
+	writeOp int
+}
+
+func newFaultyReaderWriter(failReadOp int, failWriteOp int) *faultyReaderWriter {
+	return &faultyReaderWriter{
+		FailOnReadOp:  failReadOp,
+		FailOnWriteOp: failWriteOp,
+		Buffer:        &bytes.Buffer{},
+		readOp:        0,
+		writeOp:       0,
+	}
+}
+
+func (rw *faultyReaderWriter) Read(b []byte) (int, error) {
+	rw.readOp++
+	if rw.readOp == rw.FailOnReadOp {
+		return 0, errors.New("read error")
+	}
+	return rw.Buffer.Read(b)
+}
+
+func (rw *faultyReaderWriter) Write(b []byte) (int, error) {
+	rw.writeOp++
+	if rw.writeOp == rw.FailOnWriteOp {
+		return 0, errors.New("write error")
+	}
+	return rw.Buffer.Write(b)
+}
 
 var createCaseFunctions = []func(drainBy int64, drainEvery time.Duration, capacity int64) (*Bucket, error){
 	func(drainBy int64, drainEvery time.Duration, capacity int64) (*Bucket, error) {
@@ -51,6 +91,112 @@ func TestNewBucket(t *testing.T) {
 	assert.Equal(t, int64(300), bucket.Capacity)
 	assert.Equal(t, int64(0), bucket.value)
 	assert.Equal(t, false, bucket.lastDrain.IsZero()) // ensure we set a timestamp
+}
+
+func TestBucketEncodeThenDecode(t *testing.T) {
+	for i, createFn := range createCaseFunctions {
+		bucket, err := createFn(5, time.Minute, 300)
+		if err != nil {
+			t.Errorf("TestBucketEncodeThenDecode(case:%d): unexpected error %v", i, err)
+			continue
+		}
+		bucket.value = 42                                            // force a given value
+		bucket.lastDrain = time.Now().Add(-1 * bucket.DrainInterval) // prepare for 1 drain operation
+
+		// Encode
+		buf := &bytes.Buffer{}
+		if err = bucket.Encode(buf); err != nil {
+			t.Errorf("TestBucketEncodeThenDecode(case:%d): unexpected encode error %v", i, err)
+			continue
+		}
+
+		// Decode
+		var bucket2 *Bucket
+		if bucket2, err = DecodeBucket(buf); err != nil {
+			t.Errorf("TestBucketEncodeThenDecode(case:%d): unexpected decode error %v", i, err)
+			continue
+		}
+		assert.NotEqualf(t, bucket, bucket2, "TestBucketEncodeThenDecode(case:%d)", i)
+		assert.Equalf(t, bucket.DrainBy, bucket2.DrainBy, "TestBucketEncodeThenDecode(case:%d)", i)
+		assert.Equalf(t, bucket.DrainInterval, bucket2.DrainInterval, "TestBucketEncodeThenDecode(case:%d)", i)
+		assert.Equalf(t, bucket.Capacity, bucket2.Capacity, "TestBucketEncodeThenDecode(case:%d)", i)
+		assert.Equalf(t, bucket.value, bucket2.value, "TestBucketEncodeThenDecode(case:%d)", i)
+		assert.Equalf(t, 0, bucket2.lastDrain.Compare(bucket.lastDrain), "TestBucketEncodeThenDecode(case:%d)", i)
+		assert.Equalf(t, bucket.lastDrain.UnixNano(), bucket2.lastDrain.UnixNano(), "TestBucketEncodeThenDecode(case:%d)", i)
+	}
+}
+
+func TestBucket_Encode(t *testing.T) {
+	for i, createFn := range createCaseFunctions {
+		bucket, err := createFn(5, time.Minute, 300)
+		if err != nil {
+			t.Errorf("TestBucket_Encode(case:%d): unexpected error %v", i, err)
+			continue
+		}
+		bucket.value = 42                                            // force a given value
+		bucket.lastDrain = time.Now().Add(-1 * bucket.DrainInterval) // prepare for 1 drain operation
+
+		errorMessages := []string{
+			"leaky: unable to write format version",
+			"leaky: unable to write `DrainBy`",
+			"leaky: unable to write `DrainInterval`",
+			"leaky: unable to write `Capacity`",
+			"leaky: unable to write `value`",
+			//"leaky: unable to marshal `lastDrain`",
+			"leaky: unable to write length of `lastDrain`",
+			"leaky: unable to write `lastDrain`",
+		}
+		for j, message := range errorMessages {
+			rw := newFaultyReaderWriter(j+1, j+1)
+			if err = bucket.Encode(rw); err != nil {
+				assert.ErrorContainsf(t, err, message, "TestBucket_Encode(case:%d,msg:%d)", i, j)
+			} else {
+				t.Errorf("TestBucket_Encode(case:%d,msg:%d): expected error %s", i, j, message)
+			}
+		}
+	}
+}
+
+func TestBucket_Decode(t *testing.T) {
+	for i, createFn := range createCaseFunctions {
+		bucket, err := createFn(5, time.Minute, 300)
+		if err != nil {
+			t.Errorf("TestBucket_Decode(case:%d): unexpected error %v", i, err)
+			continue
+		}
+		bucket.value = 42                                            // force a given value
+		bucket.lastDrain = time.Now().Add(-1 * bucket.DrainInterval) // prepare for 1 drain operation
+
+		buf := &bytes.Buffer{}
+		if err = bucket.Encode(buf); err != nil {
+			t.Errorf("TestBucket_Decode(case:%d): unexpected error %v", i, err)
+			continue
+		}
+
+		errorMessages := []string{
+			"leaky: unable to read format version",
+			//"leaky: unsupported format version %d",
+			"leaky: unable to read `DrainBy`",
+			"leaky: unable to read `DrainInterval`",
+			"leaky: unable to read `Capacity`",
+			"leaky: unable to read `value`",
+			"leaky: unable to read size of `lastDrain`",
+			"leaky: unable to read `lastDrain`",
+			//"leaky: did not read entire timestamp",
+			//"leaky: unable to unmarshal `lastDrain`",
+		}
+		for j, message := range errorMessages {
+			rw := newFaultyReaderWriter(j+1, j+1)
+			rw.Buffer = bytes.NewBuffer(buf.Bytes())
+			bucket2, err := DecodeBucket(rw)
+			assert.Nilf(t, bucket2, "TestBucket_Decode(case:%d,msg:%d)", i, j)
+			if err != nil {
+				assert.ErrorContainsf(t, err, message, "TestBucket_Decode(case:%d,msg:%d)", i, j)
+			} else {
+				t.Errorf("TestBucket_Decode(case:%d,msg:%d): expected error %s", i, j, message)
+			}
+		}
+	}
 }
 
 func TestBucket_drain(t *testing.T) {
