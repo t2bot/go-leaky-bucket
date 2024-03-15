@@ -1,4 +1,6 @@
 # go-leaky-bucket
+[![GoDoc](https://pkg.go.dev/badge/github.com/t2bot/go-leaky-bucket)](https://pkg.go.dev/github.com/t2bot/go-leaky-bucket)
+
 [Leaky bucket meter](https://en.wikipedia.org/wiki/Leaky_bucket#As_a_meter) implementation in Go.
 
 This implementation atomically drains when its value is being mutated rather than using a timer or continual
