@@ -10,4 +10,8 @@ be drained. However, the 30 seconds of "unused" drain time will be accounted for
 accurate. If another 1.5 minutes were to pass, the bucket will drain by another 5 units because the unused time
 was recorded.
 
+As a bonus, this implementation supports encoding and decoding the bucket in binary, allowing it to be persisted
+across application restarts or shared among processes as needed. Synchronization logic is left as an exercise for
+the consumer.
+
 See [`./examples`](./examples) for usage and inspiration.
