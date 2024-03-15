@@ -15,7 +15,7 @@ func main() {
 	}
 
 	// Set a value so we can compare later
-	if err = bucket.Set(42 /*resetDrain=*/, true); err != nil {
+	if err = bucket.Set(42); err != nil {
 		panic(err) // TODO: Handle error
 	}
 

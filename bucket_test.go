@@ -354,14 +354,14 @@ func TestBucket_Set(t *testing.T) {
 		}
 
 		// Must be positive value
-		if err = bucket.Set(-1, true); err != nil {
+		if err = bucket.Set(-1); err != nil {
 			assert.EqualErrorf(t, err, "leaky: bucket value cannot be negative", "TestBucket_Set(case:%d)", i)
 		} else {
 			t.Errorf("TestBucket_Set(case:%d): expected error, got nil", i)
 		}
 
 		// Must be less than capacity
-		if err = bucket.Set(bucket.Capacity+1, true); err != nil {
+		if err = bucket.Set(bucket.Capacity + 1); err != nil {
 			assert.EqualErrorf(t, err, "leaky: bucket value cannot exceed capacity", "TestBucket_Set(case:%d)", i)
 		} else {
 			t.Errorf("TestBucket_Set(case:%d): expected error, got nil", i)
@@ -369,7 +369,7 @@ func TestBucket_Set(t *testing.T) {
 
 		// Can be zero, and resets lastDrain, and doesn't drain
 		bucket.lastDrain = time.Now().Add(-5 * bucket.DrainInterval)
-		if err = bucket.Set(0, true); err != nil {
+		if err = bucket.Set(0); err != nil {
 			t.Errorf("TestBucket_Set(case:%d): unexpected Set error %v", i, err)
 		}
 		assert.Equal(t, int64(0), bucket.value)
@@ -377,19 +377,10 @@ func TestBucket_Set(t *testing.T) {
 
 		// Can be positive, and resets lastDrain, and doesn't drain
 		bucket.lastDrain = time.Now().Add(-5 * bucket.DrainInterval)
-		if err = bucket.Set(5, true); err != nil {
+		if err = bucket.Set(5); err != nil {
 			t.Errorf("TestBucket_Set(case:%d): unexpected Set error %v", i, err)
 		}
 		assert.Equal(t, int64(5), bucket.value)
 		assert.InDeltaf(t, 0*time.Millisecond, time.Since(bucket.lastDrain), float64(10*time.Millisecond), "TestBucket_Set(case:%d)", i)
-
-		// Doesn't reset lastDrain when resetDrain=false
-		drainTime := time.Now().Add(-5 * bucket.DrainInterval)
-		bucket.lastDrain = drainTime
-		if err = bucket.Set(10, false); err != nil {
-			t.Errorf("TestBucket_Set(case:%d): unexpected Set error %v", i, err)
-		}
-		assert.Equalf(t, int64(10), bucket.value, "TestBucket_Set(case:%d) should be equal", i)
-		assert.Equalf(t, drainTime, bucket.lastDrain, "TestBucket_Set(case:%d) should be equal", i)
 	}
 }

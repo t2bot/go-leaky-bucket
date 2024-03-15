@@ -34,13 +34,11 @@ func main() {
 	fmt.Println("Undrained size:", bucket.Peek())
 
 	// Force the bucket to have a particular size
-	if err = bucket.Set(42 /*resetDrain=*/, true); err != nil {
+	if err = bucket.Set(42); err != nil {
 		panic(err) // TODO: Handle error
 	} else {
 		// The bucket is now set to 42, and the drain has been reset. Calling `.Value()` or similar
 		// right now would not cause the size to decrease.
-		//
-		// If for some reason you'd like to leave the drain status unchanged, set resetDrain to false.
 		fmt.Println("Size after Set:", bucket.Value()) // will not drain, even if a minute had passed
 	}
 
