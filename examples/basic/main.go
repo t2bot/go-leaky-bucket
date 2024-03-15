@@ -21,6 +21,7 @@ func main() {
 		panic(err) // TODO: Handle error
 	} else {
 		// continue processing normally
+		fmt.Println("Size after add:", bucket.Value())
 	}
 
 	// Inspect the bucket
@@ -40,8 +41,8 @@ func main() {
 		// right now would not cause the size to decrease.
 		//
 		// If for some reason you'd like to leave the drain status unchanged, set resetDrain to false.
+		fmt.Println("Size after Set:", bucket.Value()) // will not drain, even if a minute had passed
 	}
-	fmt.Println("Size after Set:", bucket.Value()) // will not drain, even if a minute had passed
 
 	// Expand the bucket in any direction
 	bucket.Capacity = 700
