@@ -18,6 +18,15 @@ type Bucket struct {
 	DrainInterval time.Duration
 	Capacity      int64
 
+	// OverflowLimit configures how much an Add operation can overflow if the bucket is under
+	// capacity, but would be exceeded during the Add. For example, a bucket with a capacity
+	// of 100 is already at 90 - if OverflowLimit is set to 10, an Add of up to 20 would be
+	// allowed. If the Add was 15, the bucket would be at 105 and deny future Adds until the
+	// bucket has capacity again.
+	//
+	// Defaults to zero, providing a hard limit for the bucket.
+	OverflowLimit int64
+
 	value     int64
 	lastDrain time.Time
 	lock      sync.Mutex
@@ -119,6 +128,9 @@ func DecodeBucket(r io.Reader) (*Bucket, error) {
 	if err := bucket.lastDrain.UnmarshalBinary(timestampBytes); err != nil {
 		return nil, errors.Join(errors.New("leaky: unable to unmarshal `lastDrain`"), err)
 	}
+	if err := binary.Read(r, binary.BigEndian, &bucket.OverflowLimit); err != nil {
+		return nil, errors.Join(errors.New("leaky: unable to read `OverflowLimit`"), err)
+	}
 
 	return bucket, nil
 }
@@ -173,6 +185,9 @@ func (b *Bucket) Encode(w io.Writer) error {
 		if _, err := w.Write(timestampBytes); err != nil {
 			return errors.Join(errors.New("leaky: unable to write `lastDrain`"), err)
 		}
+	}
+	if err := binary.Write(w, binary.BigEndian, b.OverflowLimit); err != nil {
+		return errors.Join(errors.New("leaky: unable to write `OverflowLimit`"), err)
 	}
 
 	return nil
@@ -232,6 +247,8 @@ func (b *Bucket) Value() int64 {
 // The remaining capacity is calculated by subtracting the current value from the Capacity.
 // This method does not modify the bucket's internal value.
 //
+// Note that this may return a negative number if OverflowLimit is set.
+//
 // Returns the remaining capacity as an int64 value.
 func (b *Bucket) Remaining() int64 {
 	b.drain()
@@ -268,13 +285,23 @@ func (b *Bucket) Add(amount int64) error {
 	defer b.lock.Unlock()
 
 	newValue := b.value + amount
-	if amount > 0 && newValue > b.Capacity {
-		// Only complain if we're not draining.
-		return ErrBucketFull
-	}
 	if newValue < 0 {
 		newValue = 0
 	}
+
+	// Only check capacity if we're heading towards the upper limit
+	if amount > 0 {
+		// Are we already over capacity? Error if so.
+		if b.value > b.Capacity {
+			return ErrBucketFull
+		}
+
+		// Are we about to overflow beyond what we're allowed to? Error if so.
+		if newValue > (b.Capacity + b.OverflowLimit) {
+			return ErrBucketFull
+		}
+	}
+
 	b.value = newValue
 	return nil
 }

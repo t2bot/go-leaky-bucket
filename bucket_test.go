@@ -91,6 +91,7 @@ func TestNewBucket(t *testing.T) {
 	assert.Equal(t, int64(300), bucket.Capacity)
 	assert.Equal(t, int64(0), bucket.value)
 	assert.Equal(t, false, bucket.lastDrain.IsZero()) // ensure we set a timestamp
+	assert.Equal(t, int64(0), bucket.OverflowLimit)
 }
 
 func TestBucketEncodeThenDecode(t *testing.T) {
@@ -102,6 +103,7 @@ func TestBucketEncodeThenDecode(t *testing.T) {
 		}
 		bucket.value = 42                                            // force a given value
 		bucket.lastDrain = time.Now().Add(-1 * bucket.DrainInterval) // prepare for 1 drain operation
+		bucket.OverflowLimit = 24                                    // force a given value
 
 		// Encode
 		buf := &bytes.Buffer{}
@@ -123,6 +125,7 @@ func TestBucketEncodeThenDecode(t *testing.T) {
 		assert.Equalf(t, bucket.value, bucket2.value, "TestBucketEncodeThenDecode(case:%d)", i)
 		assert.Equalf(t, 0, bucket2.lastDrain.Compare(bucket.lastDrain), "TestBucketEncodeThenDecode(case:%d)", i)
 		assert.Equalf(t, bucket.lastDrain.UnixNano(), bucket2.lastDrain.UnixNano(), "TestBucketEncodeThenDecode(case:%d)", i)
+		assert.Equalf(t, bucket.OverflowLimit, bucket2.OverflowLimit, "TestBucketEncodeThenDecode(case:%d)", i)
 	}
 }
 
@@ -145,6 +148,7 @@ func TestBucket_Encode(t *testing.T) {
 			//"leaky: unable to marshal `lastDrain`",
 			"leaky: unable to write length of `lastDrain`",
 			"leaky: unable to write `lastDrain`",
+			"leaky: unable to write `OverflowLimit`",
 		}
 		for j, message := range errorMessages {
 			rw := newFaultyReaderWriter(j+1, j+1)
@@ -184,6 +188,7 @@ func TestBucket_Decode(t *testing.T) {
 			"leaky: unable to read `lastDrain`",
 			//"leaky: did not read entire timestamp",
 			//"leaky: unable to unmarshal `lastDrain`",
+			"leaky: unable to read `OverflowLimit`",
 		}
 		for j, message := range errorMessages {
 			rw := newFaultyReaderWriter(j+1, j+1)
@@ -350,6 +355,42 @@ func TestBucket_Add(t *testing.T) {
 			t.Errorf("Bucket_Add(case:%d): unexpected Add error %v", i, err)
 		}
 		assert.Equalf(t, bucket.Capacity-bucket.DrainBy, bucket.value, "Bucket_Add(case:%d) should be equal", i)
+
+		// Can overflow *slightly*
+		bucket.value = bucket.Capacity
+		bucket.OverflowLimit = 10
+		if err = bucket.Add(10); err != nil {
+			t.Errorf("Bucket_Add(case:%d): unexpected Add error %v", i, err)
+		}
+		assert.Equalf(t, bucket.Capacity+bucket.OverflowLimit, bucket.value, "Bucket_Add(case:%d) should be equal", i)
+
+		// Can't overflow past limit
+		bucket.value = bucket.Capacity
+		bucket.OverflowLimit = 10
+		if err = bucket.Add(11); err != nil {
+			if !errors.Is(err, ErrBucketFull) {
+				t.Errorf("Bucket_Add(case:%d): expected overflow error, got %v", i, err)
+			}
+		} else if err == nil {
+			t.Errorf("Bucket_Add(case:%d): expected overflow error, got nil", i)
+		}
+		assert.Equalf(t, bucket.Capacity, bucket.value, "Bucket_Add(case:%d) should be equal", i)
+
+		// Can overflow a bit, but not again
+		bucket.value = bucket.Capacity
+		bucket.OverflowLimit = 10
+		if err = bucket.Add(5); err != nil {
+			t.Errorf("Bucket_Add(case:%d): unexpected Add error %v", i, err)
+		}
+		assert.Equalf(t, bucket.Capacity+5, bucket.value, "Bucket_Add(case:%d) should be equal", i)
+		if err = bucket.Add(5); err != nil {
+			if !errors.Is(err, ErrBucketFull) {
+				t.Errorf("Bucket_Add(case:%d): expected overflow error, got %v", i, err)
+			}
+		} else if err == nil {
+			t.Errorf("Bucket_Add(case:%d): expected overflow error, got nil", i)
+		}
+		assert.Equalf(t, bucket.Capacity+5, bucket.value, "Bucket_Add(case:%d) should be equal", i)
 	}
 }
 
@@ -456,6 +497,42 @@ func TestBucket_Drain_Adds(t *testing.T) {
 			t.Errorf("Bucket_Drain_Adds(case:%d): expected overflow error, got nil", i)
 		}
 		assert.Equalf(t, bucket.Capacity, bucket.value, "Bucket_Drain_Adds(case:%d) should be equal", i)
+
+		// Can overflow *slightly*
+		bucket.value = bucket.Capacity
+		bucket.OverflowLimit = 10
+		if err = bucket.Drain(-10); err != nil {
+			t.Errorf("Bucket_Drain_Adds(case:%d): unexpected Add error %v", i, err)
+		}
+		assert.Equalf(t, bucket.Capacity+bucket.OverflowLimit, bucket.value, "Bucket_Drain_Adds(case:%d) should be equal", i)
+
+		// Can't overflow past limit
+		bucket.value = bucket.Capacity
+		bucket.OverflowLimit = 10
+		if err = bucket.Drain(-11); err != nil {
+			if !errors.Is(err, ErrBucketFull) {
+				t.Errorf("Bucket_Drain_Adds(case:%d): expected overflow error, got %v", i, err)
+			}
+		} else if err == nil {
+			t.Errorf("Bucket_Drain_Adds(case:%d): expected overflow error, got nil", i)
+		}
+		assert.Equalf(t, bucket.Capacity, bucket.value, "Bucket_Drain_Adds(case:%d) should be equal", i)
+
+		// Can overflow a bit, but not again
+		bucket.value = bucket.Capacity
+		bucket.OverflowLimit = 10
+		if err = bucket.Drain(-5); err != nil {
+			t.Errorf("Bucket_Drain_Adds(case:%d): unexpected Add error %v", i, err)
+		}
+		assert.Equalf(t, bucket.Capacity+5, bucket.value, "Bucket_Drain_Adds(case:%d) should be equal", i)
+		if err = bucket.Drain(-5); err != nil {
+			if !errors.Is(err, ErrBucketFull) {
+				t.Errorf("Bucket_Drain_Adds(case:%d): expected overflow error, got %v", i, err)
+			}
+		} else if err == nil {
+			t.Errorf("Bucket_Drain_Adds(case:%d): expected overflow error, got nil", i)
+		}
+		assert.Equalf(t, bucket.Capacity+5, bucket.value, "Bucket_Drain_Adds(case:%d) should be equal", i)
 	}
 }
 
