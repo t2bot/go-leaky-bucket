@@ -243,6 +243,11 @@ func (b *Bucket) Remaining() int64 {
 // internal value. Otherwise, the amount is added to the bucket atomically. In either case, a drain
 // operation is performed before checking the capacity.
 //
+// The amount may be negative to drain the bucket instead. ErrBucketFull will not be raised when
+// draining. Note that when negative the bucket may additionally drain on its own. For example, if
+// 1 drain operation is expected due to the timer, that will happen before the negative amount is
+// applied.
+//
 // Returns nil if successful.
 //
 // Parameters:
@@ -253,17 +258,42 @@ func (b *Bucket) Remaining() int64 {
 //
 //	error   - ErrBucketFull if the new value would exceed the capacity, otherwise nil
 func (b *Bucket) Add(amount int64) error {
-	b.drain()
+	b.drain() // always drain first
+
+	if amount == 0 {
+		return nil // optimization
+	}
 
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 	newValue := b.value + amount
-	if newValue > b.Capacity {
+	if amount > 0 && newValue > b.Capacity {
+		// Only complain if we're not draining.
 		return ErrBucketFull
+	}
+	if newValue < 0 {
+		newValue = 0
 	}
 	b.value = newValue
 	return nil
+}
+
+// Drain reduces the value of the bucket by the specified amount.
+// It is equivalent to calling Add with a negative amount.
+// If the resulting value is below 0, it is set to 0.
+//
+// See the Add documentation with a negative amount for more details.
+//
+// Parameters:
+//
+//	amount  - the amount to drain from the bucket
+//
+// Return values:
+//
+//	error   - an error message if the drain operation fails
+func (b *Bucket) Drain(amount int64) error {
+	return b.Add(-amount)
 }
 
 // Set sets the value of the Bucket.
