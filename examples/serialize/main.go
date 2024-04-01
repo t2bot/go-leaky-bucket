@@ -14,7 +14,8 @@ func main() {
 		panic(err) // TODO: Handle error
 	}
 
-	// Set a value so we can compare later
+	// Set some values so we can compare later
+	bucket.OverflowLimit = 7
 	if err = bucket.Set(42); err != nil {
 		panic(err) // TODO: Handle error
 	}
@@ -43,4 +44,5 @@ func printBucket(bucket *leaky.Bucket) {
 	fmt.Println("  Capacity:", bucket.Capacity)
 	fmt.Println("  DrainBy:", bucket.DrainBy)
 	fmt.Println("  DrainInterval:", bucket.DrainInterval)
+	fmt.Println("  OverflowLimit: ", bucket.OverflowLimit)
 }
